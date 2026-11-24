@@ -2,9 +2,6 @@ name: terraform-pr
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "envs/**"
-      - ".github/workflows/terraform-*.yml"
 
 permissions:
   contents: read
