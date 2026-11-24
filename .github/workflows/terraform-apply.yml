@@ -1,0 +1,120 @@
+name: terraform-apply
+on:
+  push:
+    branches: [main]
+    paths:
+      - "envs/**"
+      - ".github/workflows/terraform-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_owner: ${{ vars.OWNER }}
+
+jobs:
+  apply-dev:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: tfstate-dev
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+        working-directory: envs/dev
+    env:
+      TF_VAR_environment: dev
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD_DEV }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - run: terraform init -input=false
+      - run: terraform plan -input=false -no-color -lock-timeout=120s -out=tfplan
+      - run: terraform apply -input=false -no-color tfplan
+
+  apply-prod:
+    if: github.event_name == 'push'
+    needs: apply-dev
+    runs-on: ubuntu-latest
+    environment: prod
+    concurrency:
+      group: tfstate-prod
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+        working-directory: envs/prod
+    env:
+      TF_VAR_environment: prod
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD_PROD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - run: terraform init -input=false
+      - run: terraform plan -input=false -no-color -lock-timeout=120s -out=tfplan
+      - run: terraform apply -input=false -no-color tfplan
+
+  drift:
+    if: github.event_name == 'workflow_dispatch'
+    name: drift (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, prod]
+    concurrency:
+      group: tfstate-${{ matrix.env }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+        working-directory: envs/${{ matrix.env }}
+    env:
+      TF_VAR_environment: ${{ matrix.env }}
+      TF_VAR_db_password: ${{ matrix.env == 'prod' && secrets.DB_PASSWORD_PROD || secrets.DB_PASSWORD_DEV }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - run: terraform init -input=false
+      - name: Comparer le code et l'infrastructure réelle
+        run: |
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=120s -detailed-exitcode
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "Aucune dérive sur ${{ matrix.env }}." ;;
+            2) echo "::error::Dérive détectée sur ${{ matrix.env }} : l'infrastructure ne correspond plus au code."; exit 1 ;;
+            *) echo "::error::Le plan a échoué (code $code)."; exit "$code" ;;
+          esac
