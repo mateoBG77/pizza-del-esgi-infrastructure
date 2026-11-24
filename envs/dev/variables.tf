@@ -23,3 +23,15 @@ variable "environment" {
     error_message = "environment doit valoir \"dev\" ou \"prod\"."
   }
 }
+
+variable "db_password" {
+  description = "Mot de passe de la base, écrit dans Parameter Store (TF_VAR_db_password en CI, jamais dans un fichier)."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.db_password) >= 16
+    error_message = "db_password : 16 caractères minimum."
+  }
+}
