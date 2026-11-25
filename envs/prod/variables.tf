@@ -35,3 +35,10 @@ variable "db_password" {
     error_message = "db_password : 16 caractères minimum."
   }
 }
+
+
+variable "instance_type" {
+  description = "Type des instances web"
+  type        = string
+  default     = "t3.micro"
+}
